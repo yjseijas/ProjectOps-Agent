@@ -1,0 +1,66 @@
+Listado de rutas de carpetas para el volumen FamiliaSeijasPernia
+El n�mero de serie del volumen es D876-D74B
+D:.
+|   .gitignore
+|   output.txt
+|   
++---.github
+|   +---agents
+|   |       speckit.analyze.agent.md
+|   |       speckit.checklist.agent.md
+|   |       speckit.clarify.agent.md
+|   |       speckit.constitution.agent.md
+|   |       speckit.converge.agent.md
+|   |       speckit.implement.agent.md
+|   |       speckit.plan.agent.md
+|   |       speckit.specify.agent.md
+|   |       speckit.tasks.agent.md
+|   |       speckit.taskstoissues.agent.md
+|   |       
+|   \---prompts
+|           speckit.analyze.prompt.md
+|           speckit.checklist.prompt.md
+|           speckit.clarify.prompt.md
+|           speckit.constitution.prompt.md
+|           speckit.converge.prompt.md
+|           speckit.implement.prompt.md
+|           speckit.plan.prompt.md
+|           speckit.specify.prompt.md
+|           speckit.tasks.prompt.md
+|           speckit.taskstoissues.prompt.md
+|           
++---.specify
+|   |   init-options.json
+|   |   integration.json
+|   |   
+|   +---integrations
+|   |       copilot.manifest.json
+|   |       speckit.manifest.json
+|   |       
+|   +---memory
+|   |       constitution.md
+|   |       
+|   +---scripts
+|   |   \---powershell
+|   |           check-prerequisites.ps1
+|   |           common.ps1
+|   |           create-new-feature.ps1
+|   |           setup-plan.ps1
+|   |           setup-tasks.ps1
+|   |           
+|   +---templates
+|   |       checklist-template.md
+|   |       constitution-template.md
+|   |       plan-template.md
+|   |       spec-template.md
+|   |       tasks-template.md
+|   |       
+|   \---workflows
+|       |   workflow-registry.json
+|       |   
+|       \---speckit
+|               workflow.yml
+|               
+\---.vscode
+        settings.json
+        
