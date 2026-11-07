@@ -62,7 +62,7 @@ specs/001-projectops-agent/
 src/
 ├── agent/
 │   ├── orchestrator.py
-│   ├── router.py
+│   ├── graph.py
 │   └── prompts/
 ├── retrieval/
 │   ├── rag.py
