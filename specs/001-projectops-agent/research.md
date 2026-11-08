@@ -4,6 +4,12 @@
 
 The system will have one central orchestrator that inspects the user's request, sees the available capabilities, and decides whether to invoke a document retrieval tool, a graph query tool, a combined retrieval flow, or an MCP action. This aligns with the requirement that the UI remain passive and that intent selection be semantic rather than keyword-based.
 
+The central agent will use LLM-based tool selection to determine which
+capabilities are needed for each request. Python application code must not
+classify user messages using keywords or hard-coded semantic conditions.
+LangGraph will orchestrate the execution of the capabilities selected by
+the agent.
+
 ### Rationale
 
 - The constitution requires the agent to be the central decision-maker.
@@ -62,4 +68,18 @@ The user interface should only accept user input, send it to the orchestration l
 
 ## Research outcome
 
-All key unknowns are resolved by the specification and constitution. No additional clarification is required before implementation planning. The planned architecture preserves the required boundaries while remaining small, demonstrable, and extensible for the Atlas demo domain.
+The main architectural decisions have been established:
+
+- LangGraph is the central agent orchestration framework.
+- Neo4j is the database for structured project information and relationships.
+- A vector store provides document retrieval for RAG.
+- The MCP Server is an independently executable process responsible for state-changing operations.
+- The agent discovers available MCP tools dynamically at runtime.
+
+The following implementation details remain configurable or will be finalized before implementation:
+
+- Vector store: Qdrant or another compatible vector database.
+- LLM provider: configurable through environment variables.
+- Chat interface: a simple terminal interface or an existing chat UI.
+
+These choices must not change the architectural boundaries established by the Constitution.

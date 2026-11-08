@@ -15,6 +15,26 @@
 4. Launch the MCP server process with the action tool definitions.
 5. Start the LangGraph orchestrator with access to both retrieval adapters and the MCP client tools.
 
+## Application processes
+
+The application consists of two independently executable processes:
+
+1. MCP Server:
+   - Starts independently of the LangGraph agent.
+   - Connects to the persistent Atlas data store.
+   - Exposes action tools through the MCP protocol.
+   - Does not provide informational retrieval capabilities.
+
+2. LangGraph Agent:
+   - Starts the central agent orchestration pipeline.
+   - Connects to the RAG and Knowledge Graph retrieval adapters.
+   - Connects to the independently running MCP Server.
+   - Discovers available MCP tools at runtime.
+   - Receives user messages and generates responses.
+
+The user interface communicates only with the LangGraph Agent.
+It does not communicate directly with the MCP Server or retrieval databases.
+
 ## Validation scenarios
 
 ### Informational request via RAG
@@ -23,7 +43,7 @@ Ask: "What are the deployment requirements for the Atlas project?"
 
 Expected result:
 
-- The orchestrator selects the RAG retrieval path.
+- The LLM-powered agent determines that document retrieval is required and invokes the RAG capability.
 - The answer is grounded in deployment documentation.
 - No action tool is called.
 
@@ -33,7 +53,7 @@ Ask: "Who is assigned to PBI-102?"
 
 Expected result:
 
-- The orchestrator selects the graph retrieval path.
+- The LLM-powered agent determines that structured project information is required and invokes the Knowledge Graph capability.
 - The answer is produced from the graph relationship between WorkItem and Person.
 - No state change occurs.
 
