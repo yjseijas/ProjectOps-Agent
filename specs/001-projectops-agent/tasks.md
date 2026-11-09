@@ -31,9 +31,9 @@
 **Critical**: No user-story work can begin until this phase is complete.
 
 - [ ] T004 Define the Atlas seed data, configuration defaults, and domain settings in `src/config/settings.py` and `src/data/atlas_seed.py`
-- [ ] T005 [P] Implement the RAG and graph retrieval adapters and shared adapter boundaries in `src/retrieval/rag.py`, `src/retrieval/graph.py`, and `src/retrieval/adapters.py`
-- [ ] T006 [P] Implement the MCP server shell, tool metadata discovery, and request validation in `src/mcp/server.py` and `src/mcp/schemas.py`
-- [ ] T007 Implement the central LangGraph orchestrator shell and tool-planning graph in `src/agent/orchestrator.py` and `src/agent/graph.py`
+- [ ] T005 [P] Define the read-only retrieval interfaces and adapter boundaries for RAG and Knowledge Graph capabilities in `src/retrieval/adapters.py`
+- [ ] T006 [P] Create the independently executable MCP server shell in `src/mcp/server.py` and define the MCP client connection interface in `src/mcp/client.py`
+- [ ] T007 Define the LangGraph state and orchestration interfaces in `src/agent/orchestrator.py` and `src/agent/graph.py` without implementing semantic routing logic
 - [ ] T008 Implement the passive UI shell that sends user input to the agent and renders output in `src/ui/interface.py`
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel.
@@ -48,14 +48,14 @@
 
 ### Tests for User Story 1
 
-- [ ] T009 [P] [US1] Add contract tests for retrieval capability behavior in `tests/contract/test_mcp_contracts.py` and `tests/contract/test_tool_contracts.py`
+- [ ] T009 [P] [US1] Add contract tests for the RAG and Knowledge Graph retrieval interfaces in `tests/contract/test_retrieval_contracts.py`
 - [ ] T010 [P] [US1] Add integration tests for Atlas RAG, graph, and combined-query flows in `tests/integration/test_agent_routing.py`
 
 ### Implementation for User Story 1
 
 - [ ] T011 [P] [US1] Implement the Atlas document corpus queries and retrieval logic in `src/retrieval/rag.py`
 - [ ] T012 [P] [US1] Implement knowledge-graph retrieval for Project, Person, Work Item, and Technology relationships in `src/retrieval/graph.py`
-- [ ] T013 [US1] Add the combined retrieval orchestration and source selection logic in `src/agent/orchestrator.py` and `src/agent/prompts/`
+- [ ] T013 [US1] Configure the LangGraph agent to use LLM-based tool selection for RAG, Knowledge Graph, and combined retrieval capabilities without keyword-based or hard-coded semantic routing in `src/agent/orchestrator.py`, `src/agent/graph.py`, and `src/agent/prompts/`
 - [ ] T014 [US1] Add answer grounding, source attribution, and summarization for single-source and combined retrieval responses in `src/agent/graph.py`
 - [ ] T015 [US1] Validate the Atlas deployment, assignee lookup, and ownership-plus-documentation scenarios in `tests/integration/test_agent_routing.py`
 
@@ -76,11 +76,11 @@
 
 ### Implementation for User Story 2
 
-- [ ] T018 [P] [US2] Implement the JSON-schema validation contracts and dispatch rules for MCP actions in `src/mcp/schemas.py`
-- [ ] T019 [P] [US2] Implement `assign_work_item` execution logic and Neo4j persistence in `src/mcp/tools.py`
-- [ ] T020 [P] [US2] Implement `update_work_item_status` execution logic and status validation in `src/mcp/tools.py`
-- [ ] T021 [US2] Implement `create_work_item` execution logic including default `Backlog` status behavior in `src/mcp/tools.py`
-- [ ] T022 [US2] Add agent-side action selection using discovered MCP tool metadata rather than hard-coded keywords in `src/agent/orchestrator.py`
+- [ ] T018 [P] [US2] Implement the JSON-schema definitions and input/output validation contracts for the MCP action tools in `src/mcp/schemas.py`
+- [ ] T019 [US2] Implement `assign_work_item` execution logic, input validation, and Neo4j persistence in `src/mcp/tools.py`
+- [ ] T020 [US2] Implement `update_work_item_status` execution logic, status validation, and Neo4j persistence in `src/mcp/tools.py`
+- [ ] T021 [US2] Implement `create_work_item` execution logic, Neo4j persistence, and default `Backlog` status behavior in `src/mcp/tools.py`
+- [ ] T022 [US2] Integrate the MCP client with the LangGraph agent so MCP-exposed action tools are available to the LLM for autonomous tool selection and invocation in `src/agent/orchestrator.py` and `src/agent/graph.py`
 - [ ] T023 [US2] Enforce success/failure confirmation before reporting action completion in `src/agent/graph.py` and `src/agent/orchestrator.py`
 
 **Checkpoint**: At this point, User Stories 1 and 2 should both work independently.
@@ -95,13 +95,12 @@
 
 ### Tests for User Story 3
 
-- [ ] T024 [P] [US3] Add integration coverage for dynamic MCP tool discovery in `tests/integration/test_agent_routing.py`
+- [ ] T027 [US3] Add an integration test proving that a newly added MCP tool, such as `add_work_item_comment`, can be discovered and invoked without modifying the agent's decision logic in `tests/integration/test_agent_routing.py`
 
 ### Implementation for User Story 3
 
-- [ ] T025 [P] [US3] Add runtime discovery of MCP tool metadata and enabled tools in `src/mcp/server.py`
-- [ ] T026 [US3] Expose tool descriptions and JSON schema contracts through MCP metadata in `src/mcp/schemas.py`
-- [ ] T027 [US3] Ensure the orchestrator can select newly exposed tools without code changes in `src/agent/orchestrator.py` and `src/agent/graph.py`
+- [ ] T025 [US3] Implement runtime MCP tool discovery and metadata exposure, including tool names, descriptions, and input schemas, in `src/mcp/server.py` and `src/mcp/schemas.py`
+- [ ] T026 [US3] Ensure the LangGraph agent can dynamically incorporate newly discovered MCP tools into its available tool set without modifying agent decision logic in `src/agent/orchestrator.py` and `src/agent/graph.py`
 
 **Checkpoint**: User Story 3 should be independently validated by dynamic tool discovery.
 
@@ -115,13 +114,13 @@
 
 ### Tests for User Story 4
 
-- [ ] T028 [P] [US4] Add UI and boundary tests covering passive input/output behavior in `tests/integration/test_agent_routing.py` and `tests/unit/test_rag_queries.py`
+- [ ] T028 [P] [US4] Add tests verifying that the UI only forwards user messages to the agent and displays responses without performing intent classification or action execution in `tests/integration/test_agent_routing.py`
 
 ### Implementation for User Story 4
 
 - [ ] T029 [P] [US4] Keep the UI passive and free of intent classification or action execution in `src/ui/interface.py`
 - [ ] T030 [US4] Enforce read-only retrieval boundaries and no-direct-write rules across `src/retrieval/adapters.py`, `src/retrieval/graph.py`, and `src/retrieval/rag.py`
-- [ ] T031 [US4] Add guardrails rejecting direct state mutation attempts from the UI or retrieval layer in `src/agent/orchestrator.py` and `src/mcp/server.py`
+- [ ] T031 [US4] Add integration tests verifying that retrieval components are read-only and that all state-changing operations are executed exclusively through MCP tools in `tests/integration/test_mcp_actions.py`
 
 **Checkpoint**: All user stories should now be independently functional and conform to the architectural boundaries.
 
@@ -164,37 +163,37 @@
 
 ### Parallel Opportunities
 
-- All setup tasks marked `[P]` can run in parallel
-- All foundational tasks marked `[P]` can run in parallel
-- User Story 1 tests and model/retrieval tasks can proceed in parallel once the foundation is done
-- User Story 2 contract and integration tests can run in parallel with tool implementation tasks
-- User Story 3 and Story 4 work can be developed concurrently after the core foundation is ready
-
----
-
-## Parallel Example: Story 1
-
-```bash
-# Launch the US1 retrieval tests together
-Task: "Add contract tests for retrieval capability behavior in tests/contract/test_mcp_contracts.py and tests/contract/test_tool_contracts.py"
-Task: "Add integration tests for Atlas RAG, graph, and combined-query flows in tests/integration/test_agent_routing.py"
-
-# Launch the US1 retrieval implementation together
-Task: "Implement the Atlas document corpus queries and retrieval logic in src/retrieval/rag.py"
-Task: "Implement knowledge-graph retrieval for Project, Person, Work Item, and Technology relationships in src/retrieval/graph.py"
-```
+- T001 and T002 can begin independently after project initialization.
+- T003 can be completed alongside the initial project configuration.
+- T005 and T006 can proceed in parallel because they define separate infrastructure boundaries.
+- T009 and T010 can be implemented in parallel because they cover separate test files.
+- T011 and T012 can proceed in parallel because they implement RAG and Knowledge Graph retrieval in separate files.
+- T016 and T017 can be implemented in parallel because they cover separate test files.
+- T019, T020, and T021 should be implemented sequentially because they modify the same file.
+- User Stories 3 and 4 can proceed independently once their respective prerequisites are available.
+- All implementation tasks must respect their associated test-first dependencies.
 
 ---
 
 ## Implementation Strategy
 
-### MVP First (User Story 1 Only)
+### Initial Development Milestone: User Story 1
 
-1. Complete Phase 1: Setup
-2. Complete Phase 2: Foundational
-3. Complete Phase 3: User Story 1
-4. Stop and validate the story independently using `tests/integration/test_agent_routing.py`
-5. Expand to User Story 2 once the retrieval story passes cleanly
+1. Complete Phase 1: Setup.
+2. Complete Phase 2: Foundational.
+3. Complete Phase 3: User Story 1.
+4. Validate RAG, Knowledge Graph, and combined retrieval independently.
+5. Continue with User Story 2 to implement MCP-backed actions.
+
+### Challenge MVP
+
+The minimum complete challenge demonstration should include:
+
+- User Story 1: Centralized informational pipeline with RAG and Knowledge Graph.
+- User Story 2: MCP-backed action execution.
+- User Story 3: Dynamic MCP tool discovery without routing changes.
+
+User Story 4 provides additional architectural boundary verification.
 
 ### Incremental Delivery
 

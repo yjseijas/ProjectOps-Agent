@@ -82,6 +82,7 @@ src/
 tests/
 ├── contract/
 │   └── test_mcp_contracts.py
+    └── test_retrieval_contracts.py
 ├── integration/
 │   ├── test_agent_routing.py
 │   └── test_mcp_actions.py
