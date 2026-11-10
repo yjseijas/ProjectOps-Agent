@@ -18,7 +18,7 @@
 
 **Purpose**: Project initialization and shared tooling for the Python multi-service architecture.
 
-- [X] T001 Create the project directory structure required by the implementation plan in `src/agent/`, `src/retrieval/`, `src/mcp/`, `src/ui/`, `src/data/`, `src/config/`, and `tests/`
+- [X] T001 Create the project directory structure required by the implementation plan in `src/agent/`, `src/retrieval/`, `src/projectops_mcp/`, `src/ui/`, `src/data/`, `src/config/`, and `tests/`
 - [X] T002 Initialize the Python 3.11 project configuration and dependency definitions for LangGraph, Pydantic, Neo4j, vector-store client, and pytest in `pyproject.toml` or `requirements.txt`
 - [X] T003 [P] Configure shared linting, formatting, and test tooling in `pyproject.toml` and `.env.example`
 
@@ -32,7 +32,7 @@
 
 - [X] T004 Define the Atlas seed data, configuration defaults, and domain settings in `src/config/settings.py` and `src/data/atlas_seed.py`
 - [X] T005 [P] Define the read-only retrieval interfaces and adapter boundaries for RAG and Knowledge Graph capabilities in `src/retrieval/adapters.py`
-- [X] T006 [P] Create the independently executable MCP server shell in `src/mcp/server.py` and define the MCP client connection interface in `src/mcp/client.py`
+- [X] T006 [P] Create the independently executable MCP server shell in `src/projectops_mcp/server.py` and define the MCP client connection interface in `src/projectops_mcp/client.py`
 - [X] T007 Define the LangGraph state and orchestration interfaces in `src/agent/orchestrator.py` and `src/agent/graph.py` without implementing semantic routing logic
 - [X] T008 Implement the passive UI shell that sends user input to the agent and renders output in `src/ui/interface.py`
 
@@ -76,10 +76,10 @@
 
 ### Implementation for User Story 2
 
-- [ ] T018 [P] [US2] Implement the JSON-schema definitions and input/output validation contracts for the MCP action tools in `src/mcp/schemas.py`
-- [ ] T019 [US2] Implement `assign_work_item` execution logic, input validation, and Neo4j persistence in `src/mcp/tools.py`
-- [ ] T020 [US2] Implement `update_work_item_status` execution logic, status validation, and Neo4j persistence in `src/mcp/tools.py`
-- [ ] T021 [US2] Implement `create_work_item` execution logic, Neo4j persistence, and default `Backlog` status behavior in `src/mcp/tools.py`
+- [ ] T018 [P] [US2] Implement the JSON-schema definitions and input/output validation contracts for the MCP action tools in `src/projectops_mcp/schemas.py`
+- [ ] T019 [US2] Implement `assign_work_item` execution logic, input validation, and Neo4j persistence in `src/projectops_mcp/tools.py`
+- [ ] T020 [US2] Implement `update_work_item_status` execution logic, status validation, and Neo4j persistence in `src/projectops_mcp/tools.py`
+- [ ] T021 [US2] Implement `create_work_item` execution logic, Neo4j persistence, and default `Backlog` status behavior in `src/projectops_mcp/tools.py`
 - [ ] T022 [US2] Integrate the MCP client with the LangGraph agent so MCP-exposed action tools are available to the LLM for autonomous tool selection and invocation in `src/agent/orchestrator.py` and `src/agent/graph.py`
 - [ ] T023 [US2] Enforce success/failure confirmation before reporting action completion in `src/agent/graph.py` and `src/agent/orchestrator.py`
 
@@ -99,7 +99,7 @@
 
 ### Implementation for User Story 3
 
-- [ ] T025 [US3] Implement runtime MCP tool discovery and metadata exposure, including tool names, descriptions, and input schemas, in `src/mcp/server.py` and `src/mcp/schemas.py`
+- [ ] T025 [US3] Implement runtime MCP tool discovery and metadata exposure, including tool names, descriptions, and input schemas, in `src/projectops_mcp/server.py` and `src/projectops_mcp/schemas.py`
 - [ ] T026 [US3] Ensure the LangGraph agent can dynamically incorporate newly discovered MCP tools into its available tool set without modifying agent decision logic in `src/agent/orchestrator.py` and `src/agent/graph.py`
 
 **Checkpoint**: User Story 3 should be independently validated by dynamic tool discovery.
@@ -133,7 +133,7 @@
 - [ ] T032 [P] Update release-facing documentation and architecture notes in `README.md` and `specs/001-projectops-agent/quickstart.md`
 - [ ] T033 [P] Add or expand unit coverage for retrieval edge cases in `tests/unit/test_rag_queries.py` and `tests/unit/test_graph_queries.py`
 - [ ] T034 Run the Atlas validation scenarios from `specs/001-projectops-agent/quickstart.md` and confirm all informational and action flows pass
-- [ ] T035 Refine error handling, logging, and invalid-input guardrails across `src/agent/`, `src/retrieval/`, and `src/mcp/`
+- [ ] T035 Refine error handling, logging, and invalid-input guardrails across `src/agent/`, `src/retrieval/`, and `src/projectops_mcp/`
 - [ ] T036 Final integration verification that the Atlas demo respects the UI-passive, MCP-only action, and combined-retrieval constraints across the repository
 
 ---
