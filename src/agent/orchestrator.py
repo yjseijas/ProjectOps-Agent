@@ -9,7 +9,7 @@ from .graph import AgentNode, build_agent_graph
 class CompiledAgent(Protocol):
     """Subset of a compiled LangGraph used by the orchestration boundary."""
 
-    def invoke(self, input: Mapping[str, Any]) -> Mapp+--------------------------ing[str, Any]:
+    def invoke(self, input: Mapping[str, Any]) -> Mapping[str, Any]:
         """Invoke the graph for one user input."""
         ...
 

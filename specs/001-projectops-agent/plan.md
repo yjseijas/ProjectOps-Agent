@@ -68,7 +68,7 @@ src/
 │   ├── rag.py
 │   ├── graph.py
 │   └── adapters.py
-├── mcp/
+├── projectops_mcp/
 │   ├── server.py
 │   ├── tools.py
 │   └── schemas.py

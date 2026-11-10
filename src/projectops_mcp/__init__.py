@@ -1,0 +1,1 @@
+"""ProjectOps MCP application package."""
