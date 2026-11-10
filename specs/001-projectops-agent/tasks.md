@@ -18,9 +18,9 @@
 
 **Purpose**: Project initialization and shared tooling for the Python multi-service architecture.
 
-- [ ] T001 Create the project directory structure required by the implementation plan in `src/agent/`, `src/retrieval/`, `src/mcp/`, `src/ui/`, `src/data/`, `src/config/`, and `tests/`
-- [ ] T002 Initialize the Python 3.11 project configuration and dependency definitions for LangGraph, Pydantic, Neo4j, vector-store client, and pytest in `pyproject.toml` or `requirements.txt`
-- [ ] T003 [P] Configure shared linting, formatting, and test tooling in `pyproject.toml` and `.env.example`
+- [X] T001 Create the project directory structure required by the implementation plan in `src/agent/`, `src/retrieval/`, `src/mcp/`, `src/ui/`, `src/data/`, `src/config/`, and `tests/`
+- [X] T002 Initialize the Python 3.11 project configuration and dependency definitions for LangGraph, Pydantic, Neo4j, vector-store client, and pytest in `pyproject.toml` or `requirements.txt`
+- [X] T003 [P] Configure shared linting, formatting, and test tooling in `pyproject.toml` and `.env.example`
 
 ---
 
@@ -30,11 +30,11 @@
 
 **Critical**: No user-story work can begin until this phase is complete.
 
-- [ ] T004 Define the Atlas seed data, configuration defaults, and domain settings in `src/config/settings.py` and `src/data/atlas_seed.py`
-- [ ] T005 [P] Define the read-only retrieval interfaces and adapter boundaries for RAG and Knowledge Graph capabilities in `src/retrieval/adapters.py`
-- [ ] T006 [P] Create the independently executable MCP server shell in `src/mcp/server.py` and define the MCP client connection interface in `src/mcp/client.py`
-- [ ] T007 Define the LangGraph state and orchestration interfaces in `src/agent/orchestrator.py` and `src/agent/graph.py` without implementing semantic routing logic
-- [ ] T008 Implement the passive UI shell that sends user input to the agent and renders output in `src/ui/interface.py`
+- [X] T004 Define the Atlas seed data, configuration defaults, and domain settings in `src/config/settings.py` and `src/data/atlas_seed.py`
+- [X] T005 [P] Define the read-only retrieval interfaces and adapter boundaries for RAG and Knowledge Graph capabilities in `src/retrieval/adapters.py`
+- [X] T006 [P] Create the independently executable MCP server shell in `src/mcp/server.py` and define the MCP client connection interface in `src/mcp/client.py`
+- [X] T007 Define the LangGraph state and orchestration interfaces in `src/agent/orchestrator.py` and `src/agent/graph.py` without implementing semantic routing logic
+- [X] T008 Implement the passive UI shell that sends user input to the agent and renders output in `src/ui/interface.py`
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel.
 
