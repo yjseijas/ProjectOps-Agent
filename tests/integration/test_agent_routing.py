@@ -127,8 +127,14 @@ def test_atlas_migration_question_uses_both_readers_through_central_agent() -> N
             "PBI-101": {
                 "entity_type": "WorkItem",
                 "entity_id": "PBI-101",
-                "properties": {"title": "Plan Atlas API migration", "owner_id": "alice"},
+                "properties": {"title": "Plan Atlas API migration"},
                 "relationships": {"BELONGS_TO": ("atlas",)},
+            },
+            "alice": {
+                "entity_type": "Person",
+                "entity_id": "alice",
+                "properties": {"name": "Alice"},
+                "relationships": {"OWNS": ("PBI-101",)},
             }
         }
     )
@@ -164,4 +170,5 @@ def test_atlas_migration_question_uses_both_readers_through_central_agent() -> N
     assert "preserving client compatibility" in result
     assert seen_requests == [request]
     assert graph.calls == [("get_work_item", "PBI-101")]  # type: ignore[attr-defined]
+    assert graph.records["alice"]["relationships"]["OWNS"] == ("PBI-101",)  # type: ignore[attr-defined]
     assert rag.calls == [("Atlas API migration", 5)]  # type: ignore[attr-defined]
