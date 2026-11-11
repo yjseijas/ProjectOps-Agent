@@ -48,8 +48,8 @@
 
 ### Tests for User Story 1
 
-- [ ] T009 [P] [US1] Add contract tests for the RAG and Knowledge Graph retrieval interfaces in `tests/contract/test_retrieval_contracts.py`
-- [ ] T010 [P] [US1] Add integration tests for Atlas RAG, graph, and combined-query flows in `tests/integration/test_agent_routing.py`
+- [X] T009 [P] [US1] Add contract tests for the RAG and Knowledge Graph retrieval interfaces in `tests/contract/test_retrieval_contracts.py`
+- [X] T010 [P] [US1] Add integration tests for Atlas RAG, graph, and combined-query flows in `tests/integration/test_agent_routing.py`
 
 ### Implementation for User Story 1
 
