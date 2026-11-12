@@ -12,9 +12,9 @@ ProjectOps Agent is a Python-based LangGraph application that centralizes reques
 
 **Language/Version**: Python 3.11
 
-**Primary Dependencies**: LangGraph, Pydantic, MCP Python SDK, Neo4j, a vector store such as Qdrant or pgvector, plus pytest for automation.
+**Primary Dependencies**: LangGraph, Pydantic, MCP Python SDK, Neo4j, Qdrant, the OpenAI API for chat and `text-embedding-3-small` embeddings, plus pytest for automation.
 
-**Storage**: Neo4j stores the Atlas domain graph; a vector store stores project documentation embeddings; a small seeded Atlas dataset provides project facts, documentation, and work items.
+**Storage**: Neo4j stores the Atlas domain graph; Qdrant stores Atlas documentation embeddings; a small seeded Atlas dataset provides project facts, documentation, and work items. Embedding provider and model are configured independently from the existing chat provider and model.
 
 **Testing**: pytest, integration tests for end-to-end agent flows, contract tests for MCP tool schemas, and fixture-based validation for the Atlas demo corpus.
 

@@ -53,7 +53,7 @@
 
 ### Implementation for User Story 1
 
-- [ ] T011 [P] [US1] Implement the Atlas document corpus queries and retrieval logic in `src/retrieval/rag.py`
+- [X] T011 [P] [US1] Implement the Atlas document corpus queries and retrieval logic in `src/retrieval/rag.py`
 - [ ] T012 [P] [US1] Implement knowledge-graph retrieval for Project, Person, Work Item, and Technology relationships in `src/retrieval/graph.py`
 - [ ] T013 [US1] Configure the LangGraph agent to use LLM-based tool selection for RAG, Knowledge Graph, and combined retrieval capabilities without keyword-based or hard-coded semantic routing in `src/agent/orchestrator.py`, `src/agent/graph.py`, and `src/agent/prompts/`
 - [ ] T014 [US1] Add answer grounding, source attribution, and summarization for single-source and combined retrieval responses in `src/agent/graph.py`

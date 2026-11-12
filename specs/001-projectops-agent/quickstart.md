@@ -11,9 +11,15 @@
 
 1. Create a virtual environment and install project dependencies.
 2. Start the Neo4j instance with the Atlas seed dataset.
-3. Start the vector database and ingest the Atlas documentation corpus.
-4. Launch the MCP server process with the action tool definitions.
-5. Start the LangGraph orchestrator with access to both retrieval adapters and the MCP client tools.
+3. Configure `EMBEDDING_PROVIDER=openai`, `EMBEDDING_MODEL=text-embedding-3-small`, and the OpenAI embedding credential using `EMBEDDING_API_KEY` (or the configured `LLM_API_KEY` when sharing the same OpenAI credential). Leave `LLM_MODEL` unchanged to retain the configured chat model.
+4. Start Qdrant and ingest the Atlas documentation corpus into the configured Qdrant collection.
+5. Launch the MCP server process with the action tool definitions.
+6. Start the LangGraph orchestrator with access to both retrieval adapters and the MCP client tools.
+
+Before searching, initialize `QdrantRAGReader` and call
+`await reader.ingest_atlas_documents()`. This embeds the seeded Atlas documents
+with the configured OpenAI model, creates the collection if needed, and upserts
+the corpus using stable document IDs.
 
 ## Application processes
 
