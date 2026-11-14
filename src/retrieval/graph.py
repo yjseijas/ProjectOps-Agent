@@ -10,7 +10,6 @@ from neo4j import AsyncDriver, AsyncGraphDatabase
 from config.settings import Settings, settings
 from retrieval.adapters import GraphRecord
 
-
 _PROJECT_QUERY = """
 MATCH (project:Project {id: $project_id})
 OPTIONAL MATCH (project)-[:USES]->(technology:Technology)

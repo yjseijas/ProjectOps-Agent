@@ -322,12 +322,9 @@ async def test_reader_only_runs_parameterized_read_queries_and_closes_driver() -
 
     query, parameters, _ = driver.queries[0]
     assert "PBI-102" not in query
-    assert parameters == {
-        "work_item_id": "PBI-102' MATCH (n) DETACH DELETE n //"
-    }
+    assert parameters == {"work_item_id": "PBI-102' MATCH (n) DETACH DELETE n //"}
     assert not any(
-        keyword in query.upper()
-        for keyword in ("CREATE ", "MERGE ", "DELETE ", " SET ", "REMOVE ")
+        keyword in query.upper() for keyword in ("CREATE ", "MERGE ", "DELETE ", " SET ", "REMOVE ")
     )
 
     await reader.close()
