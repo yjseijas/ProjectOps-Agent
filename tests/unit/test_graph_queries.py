@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from config.settings import Settings
@@ -22,12 +24,13 @@ class _Session:
     def __init__(self, driver: _Driver, database: str) -> None:
         self._driver = driver
         self.database = database
+        self.closed = False
 
     async def __aenter__(self) -> _Session:
         return self
 
     async def __aexit__(self, *_: object) -> None:
-        return None
+        self.closed = True
 
     async def run(self, query: str, **parameters: object) -> _Result:
         self._driver.queries.append((query, parameters, self.database))
@@ -38,10 +41,13 @@ class _Driver:
     def __init__(self, responses: list[list[dict[str, object]]] | None = None) -> None:
         self.responses = responses or []
         self.queries: list[tuple[str, dict[str, object], str]] = []
+        self.sessions: list[_Session] = []
         self.closed = False
 
     def session(self, *, database: str) -> _Session:
-        return _Session(self, database)
+        session = _Session(self, database)
+        self.sessions.append(session)
+        return session
 
     async def close(self) -> None:
         self.closed = True
@@ -67,6 +73,25 @@ def _assert_graph_record(record: GraphRecord) -> None:
     assert all(
         isinstance(ids, tuple) and all(isinstance(entity_id, str) for entity_id in ids)
         for ids in record["relationships"].values()
+    )
+
+
+def test_concrete_reader_exposes_only_contract_retrieval_methods() -> None:
+    public_methods = {
+        name
+        for name, value in vars(Neo4jKnowledgeGraphReader).items()
+        if not name.startswith("_") and callable(value)
+    }
+    retrieval_methods = public_methods - {"close"}
+
+    assert retrieval_methods == {
+        "get_project",
+        "get_work_item",
+        "list_project_technologies",
+    }
+    assert all(
+        inspect.iscoroutinefunction(getattr(Neo4jKnowledgeGraphReader, name))
+        for name in retrieval_methods
     )
 
 
@@ -136,6 +161,41 @@ async def test_get_project_maps_properties_and_relationships() -> None:
     assert "(work_item:WorkItem)-[:BELONGS_TO]->(project)" in query
     assert parameters == {"project_id": "atlas"}
     assert database == "atlas-test"
+    assert len(driver.sessions) == 1
+    assert driver.sessions[0].closed
+
+
+@pytest.mark.asyncio
+async def test_get_project_without_related_nodes_returns_empty_relationship_tuples() -> None:
+    reader, driver = _reader(
+        [
+            [
+                {
+                    "project": {"id": "atlas", "name": "Atlas", "description": "Demo"},
+                    "technology_ids": [],
+                    "document_ids": [],
+                    "work_item_ids": [],
+                }
+            ]
+        ]
+    )
+
+    project = await reader.get_project("atlas")
+
+    assert project == {
+        "entity_type": "Project",
+        "entity_id": "atlas",
+        "properties": {"id": "atlas", "name": "Atlas", "description": "Demo"},
+        "relationships": {
+            "BELONGS_TO": (),
+            "USES": (),
+            "DOCUMENTED_BY": (),
+        },
+    }
+    assert project is not None
+    _assert_graph_record(project)
+    assert len(driver.sessions) == 1
+    assert driver.sessions[0].closed
 
 
 @pytest.mark.asyncio
