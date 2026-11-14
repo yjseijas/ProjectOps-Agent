@@ -49,7 +49,7 @@ class _KnowledgeGraphReaderDouble:
                 "entity_type": "Technology",
                 "entity_id": "angular",
                 "properties": {"name": "Angular"},
-                "relationships": {"USED_BY": ("atlas",)},
+                "relationships": {"USES": ("atlas",)},
             }
         ]
         self.calls: list[tuple[str, str]] = []

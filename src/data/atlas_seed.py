@@ -73,7 +73,7 @@ ATLAS_PEOPLE = (
         name="Alice",
         role="Backend Engineer",
         project_ids=("atlas",),
-        owned_work_item_ids=("PBI-101",),
+        owned_work_item_ids=("PBI-101", "PBI-102"),
     ),
     PersonSeed(
         id="bob",
