@@ -1,5 +1,6 @@
 """LLM tool-selection behavior for the informational LangGraph."""
 
+import asyncio
 from json import dumps, loads
 from types import SimpleNamespace
 
@@ -13,9 +14,11 @@ class _FakeLLM:
     def __init__(self, *responses: object) -> None:
         self.responses = list(responses)
         self.requests: list[dict[str, object]] = []
+        self.event_loops: list[asyncio.AbstractEventLoop] = []
         self.chat = SimpleNamespace(completions=self)
 
     async def create(self, **request: object) -> object:
+        self.event_loops.append(asyncio.get_running_loop())
         self.requests.append(request)
         return self.responses.pop(0)
 
@@ -31,8 +34,10 @@ class _RAGReader:
             }
         ]
         self.calls: list[tuple[str, int]] = []
+        self.event_loops: list[asyncio.AbstractEventLoop] = []
 
     async def search_documents(self, query: str, *, limit: int = 5) -> list[RetrievedDocument]:
+        self.event_loops.append(asyncio.get_running_loop())
         self.calls.append((query, limit))
         return self.documents[:limit]
 
@@ -51,6 +56,7 @@ class _KnowledgeGraphReader:
             "properties": {"title": "Upgrade Angular application"},
             "relationships": {"ASSIGNED_TO": ("bob",)},
         }
+        self.technologies: list[GraphRecord] = []
         self.calls: list[tuple[str, str]] = []
 
     async def get_project(self, project_id: str) -> GraphRecord | None:
@@ -63,7 +69,7 @@ class _KnowledgeGraphReader:
 
     async def list_project_technologies(self, project_id: str) -> list[GraphRecord]:
         self.calls.append(("list_project_technologies", project_id))
-        return []
+        return self.technologies if project_id == "atlas" else []
 
 
 def _response(content: str | None = None, *tool_calls: object) -> object:
@@ -83,11 +89,24 @@ def _tool_call(name: str, arguments: dict[str, object], call_id: str) -> object:
     )
 
 
-def _agent(rag: _RAGReader, graph: _KnowledgeGraphReader, llm: _FakeLLM) -> AgentOrchestrator:
-    return AgentOrchestrator.from_readers(rag, graph, llm_client=llm)
+@pytest.fixture
+def agent_factory():
+    agents: list[AgentOrchestrator] = []
+
+    def create_agent(
+        rag: _RAGReader, graph: _KnowledgeGraphReader, llm: _FakeLLM
+    ) -> AgentOrchestrator:
+        agent = AgentOrchestrator.from_readers(rag, graph, llm_client=llm)
+        agents.append(agent)
+        return agent
+
+    yield create_agent
+
+    for agent in agents:
+        agent.close()
 
 
-def test_llm_selects_rag_and_graph_generates_final_response() -> None:
+def test_llm_selects_rag_and_graph_generates_final_response(agent_factory) -> None:
     request = "What are Atlas's deployment prerequisites?"
     rag = _RAGReader()
     graph = _KnowledgeGraphReader()
@@ -96,7 +115,7 @@ def test_llm_selects_rag_and_graph_generates_final_response() -> None:
         _response("Atlas requires Python 3.11 and Neo4j."),
     )
 
-    result = _agent(rag, graph, llm).invoke(request)
+    result = agent_factory(rag, graph, llm).invoke(request)
 
     assert result == "Atlas requires Python 3.11 and Neo4j."
     assert rag.calls == [(request, 5)]
@@ -121,7 +140,7 @@ def test_llm_selects_rag_and_graph_generates_final_response() -> None:
     }
 
 
-def test_llm_selects_knowledge_graph_and_graph_generates_final_response() -> None:
+def test_llm_selects_knowledge_graph_and_graph_generates_final_response(agent_factory) -> None:
     request = "Who currently owns responsibility for PBI-102?"
     rag = _RAGReader()
     graph = _KnowledgeGraphReader()
@@ -130,7 +149,7 @@ def test_llm_selects_knowledge_graph_and_graph_generates_final_response() -> Non
         _response("PBI-102 is assigned to Bob."),
     )
 
-    result = _agent(rag, graph, llm).invoke(request)
+    result = agent_factory(rag, graph, llm).invoke(request)
 
     assert result == "PBI-102 is assigned to Bob."
     assert graph.calls == [("get_work_item", "PBI-102")]
@@ -138,7 +157,7 @@ def test_llm_selects_knowledge_graph_and_graph_generates_final_response() -> Non
     assert "PBI-102" in llm.requests[1]["messages"][-1]["content"]  # type: ignore[index,operator]
 
 
-def test_llm_can_select_rag_and_knowledge_graph_together() -> None:
+def test_llm_can_select_rag_and_knowledge_graph_together(agent_factory) -> None:
     request = "Summarize the project facts and the related deployment guidance."
     rag = _RAGReader()
     graph = _KnowledgeGraphReader()
@@ -151,7 +170,7 @@ def test_llm_can_select_rag_and_knowledge_graph_together() -> None:
         _response("Atlas uses Neo4j and requires Python 3.11."),
     )
 
-    result = _agent(rag, graph, llm).invoke(request)
+    result = agent_factory(rag, graph, llm).invoke(request)
 
     assert result == "Atlas uses Neo4j and requires Python 3.11."
     assert graph.calls == [("get_project", "atlas")]
@@ -171,7 +190,7 @@ def test_llm_can_select_rag_and_knowledge_graph_together() -> None:
     }
 
 
-def test_graph_follows_llm_tool_call_not_request_wording() -> None:
+def test_graph_follows_llm_tool_call_not_request_wording(agent_factory) -> None:
     request = "Who is assigned to PBI-102?"
     rag = _RAGReader()
     graph = _KnowledgeGraphReader()
@@ -183,7 +202,7 @@ def test_graph_follows_llm_tool_call_not_request_wording() -> None:
         _response("The documentation describes the assignment policy."),
     )
 
-    result = _agent(rag, graph, llm).invoke(request)
+    result = agent_factory(rag, graph, llm).invoke(request)
 
     assert result == "The documentation describes the assignment policy."
     assert rag.calls == [("assignment policy", 5)]
@@ -191,7 +210,7 @@ def test_graph_follows_llm_tool_call_not_request_wording() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ainvoke_uses_async_graph_inside_an_existing_event_loop() -> None:
+async def test_ainvoke_uses_async_graph_inside_an_existing_event_loop(agent_factory) -> None:
     request = "Describe Atlas deployment prerequisites."
     rag = _RAGReader()
     graph = _KnowledgeGraphReader()
@@ -200,8 +219,59 @@ async def test_ainvoke_uses_async_graph_inside_an_existing_event_loop() -> None:
         _response("Atlas requires Python 3.11 and Neo4j."),
     )
 
-    result = await _agent(rag, graph, llm).ainvoke(request)
+    result = await agent_factory(rag, graph, llm).ainvoke(request)
 
     assert result == "Atlas requires Python 3.11 and Neo4j."
     assert rag.calls == [(request, 5)]
     assert graph.calls == []
+
+
+def test_llm_selects_project_technology_lookup(agent_factory) -> None:
+    request = "Which technologies are currently associated with Atlas?"
+    rag = _RAGReader()
+    graph = _KnowledgeGraphReader()
+    graph.technologies = [
+        {
+            "entity_type": "Technology",
+            "entity_id": "neo4j",
+            "properties": {"name": "Neo4j"},
+            "relationships": {"USES": ("atlas",)},
+        }
+    ]
+    llm = _FakeLLM(
+        _response(
+            None,
+            _tool_call("list_project_technologies", {"project_id": "atlas"}, "technology-call"),
+        ),
+        _response("Atlas uses Neo4j."),
+    )
+
+    result = agent_factory(rag, graph, llm).invoke(request)
+
+    assert result == "Atlas uses Neo4j."
+    assert graph.calls == [("list_project_technologies", "atlas")]
+    assert rag.calls == []
+    tool_message = llm.requests[1]["messages"][-1]  # type: ignore[index]
+    assert tool_message == {
+        "role": "tool",
+        "tool_call_id": "technology-call",
+        "content": dumps(graph.technologies),
+    }
+
+
+def test_repeated_sync_invocations_reuse_one_event_loop(agent_factory) -> None:
+    rag = _RAGReader()
+    graph = _KnowledgeGraphReader()
+    llm = _FakeLLM(
+        _response(None, _tool_call("search_documents", {"query": "first query"}, "first-call")),
+        _response("First response."),
+        _response(None, _tool_call("search_documents", {"query": "second query"}, "second-call")),
+        _response("Second response."),
+    )
+    agent = agent_factory(rag, graph, llm)
+
+    assert agent.invoke("First request.") == "First response."
+    assert agent.invoke("Second request.") == "Second response."
+    assert rag.calls == [("first query", 5), ("second query", 5)]
+    assert graph.calls == []
+    assert len(set(llm.event_loops + rag.event_loops)) == 1
