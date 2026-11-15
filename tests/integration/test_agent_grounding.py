@@ -128,14 +128,19 @@ def test_knowledge_graph_only_response_receives_entity_evidence() -> None:
     graph = _KnowledgeGraphReader(work_item)
     llm = _FakeLLM(
         _response(None, _tool_call("get_work_item", {"work_item_id": "PBI-102"}, "graph-call")),
-        _response("PBI-102 is assigned to Bob. Source: Knowledge Graph — WorkItem PBI-102."),
+        _response(
+            "PBI-102 is assigned to person ID bob. Source: Knowledge Graph — WorkItem PBI-102."
+        ),
     )
 
     result = _agent(rag, graph, llm).invoke(request)
 
     tool_messages, system_message = _final_turn(llm)
     evidence = loads(tool_messages[0]["content"])
-    assert result == "PBI-102 is assigned to Bob. Source: Knowledge Graph — WorkItem PBI-102."
+    assert (
+        result
+        == "PBI-102 is assigned to person ID bob. Source: Knowledge Graph — WorkItem PBI-102."
+    )
     assert rag.calls == []
     assert graph.calls == [("get_work_item", "PBI-102")]
     assert evidence["entity_type"] == "WorkItem"
