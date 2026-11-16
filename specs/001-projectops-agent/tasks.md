@@ -71,7 +71,7 @@
 
 ### Tests for User Story 2
 
-- [ ] T016 [P] [US2] Add MCP contract tests for `assign_work_item`, `update_work_item_status`, and `create_work_item` in `tests/contract/test_mcp_contracts.py`
+- [X] T016 [P] [US2] Add MCP contract tests for `assign_work_item`, `update_work_item_status`, and `create_work_item` in `tests/contract/test_mcp_contracts.py`
 - [ ] T017 [P] [US2] Add integration tests for action execution success and failure paths in `tests/integration/test_mcp_actions.py`
 
 ### Implementation for User Story 2
