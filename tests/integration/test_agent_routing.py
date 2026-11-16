@@ -1,16 +1,23 @@
-"""Central-agent wiring scenarios using scripted retrieval test doubles.
+"""Atlas retrieval scenarios through the centralized informational graph."""
 
-These tests validate graph/orchestrator plumbing only. Capability selection is
-deliberately scripted rather than inferred from request text; semantic routing
-is outside the scope until its implementation task.
-"""
+from json import dumps, loads
+from types import SimpleNamespace
 
-import asyncio
-from collections.abc import Callable
-from typing import Any
+import pytest
 
 from agent.orchestrator import AgentOrchestrator
-from retrieval.adapters import GraphRecord, KnowledgeGraphReader, RAGReader, RetrievedDocument
+from retrieval.adapters import GraphRecord, RetrievedDocument
+
+
+class _FakeLLM:
+    def __init__(self, *responses: object) -> None:
+        self.responses = list(responses)
+        self.requests: list[dict[str, object]] = []
+        self.chat = SimpleNamespace(completions=self)
+
+    async def create(self, **request: object) -> object:
+        self.requests.append(request)
+        return self.responses.pop(0)
 
 
 class _RAGReaderDouble:
@@ -18,9 +25,7 @@ class _RAGReaderDouble:
         self.documents = documents
         self.calls: list[tuple[str, int]] = []
 
-    async def search_documents(
-        self, query: str, *, limit: int = 5
-    ) -> list[RetrievedDocument]:
+    async def search_documents(self, query: str, *, limit: int = 5) -> list[RetrievedDocument]:
         self.calls.append((query, limit))
         return self.documents[:limit]
 
@@ -46,129 +51,210 @@ class _KnowledgeGraphReaderDouble:
         return record.get("technologies", [])  # type: ignore[typeddict-item]
 
 
-def _scripted_agent_node(
-    retrieval_calls: tuple[Callable[[], Any], ...],
-    response: str,
-    seen_requests: list[str],
-) -> Callable[[dict[str, Any]], dict[str, str]]:
-    """Make a test-only node with a fixed capability plan independent of input."""
-
-    def agent_node(state: dict[str, Any]) -> dict[str, str]:
-        seen_requests.append(state["user_input"])
-        for retrieve in retrieval_calls:
-            asyncio.run(retrieve())
-        return {"response": response}
-
-    return agent_node
+def _response(content: str | None = None, *tool_calls: object) -> object:
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=content, tool_calls=list(tool_calls) or None)
+            )
+        ]
+    )
 
 
-def test_atlas_deployment_question_uses_central_agent_and_rag_double() -> None:
+def _tool_call(name: str, arguments: dict[str, object], call_id: str) -> object:
+    return SimpleNamespace(
+        id=call_id,
+        function=SimpleNamespace(name=name, arguments=dumps(arguments)),
+    )
+
+
+def _tool_messages(llm: _FakeLLM) -> list[dict[str, object]]:
+    messages = llm.requests[1]["messages"]
+    return [message for message in messages if message["role"] == "tool"]  # type: ignore[index]
+
+
+@pytest.fixture
+def agent_factory():
+    agents: list[AgentOrchestrator] = []
+
+    def create_agent(
+        rag: _RAGReaderDouble,
+        graph: _KnowledgeGraphReaderDouble,
+        llm: _FakeLLM,
+    ) -> AgentOrchestrator:
+        agent = AgentOrchestrator.from_readers(rag, graph, llm_client=llm)
+        agents.append(agent)
+        return agent
+
+    yield create_agent
+
+    for agent in agents:
+        agent.close()
+
+
+def test_atlas_deployment_question_uses_seeded_rag_evidence(agent_factory) -> None:
     request = "What are the deployment requirements for the Atlas project?"
-    rag: RAGReader = _RAGReaderDouble(
-        [
-            {
-                "id": "atlas-deployment",
-                "title": "Atlas Deployment Guide",
-                "content": (
-                    "The local demo requires Python 3.11 or newer, Neo4j, and a "
-                    "vector store."
-                ),
-                "source": "atlas-deployment",
-            }
-        ]
+    document: RetrievedDocument = {
+        "id": "atlas-deployment",
+        "title": "Atlas Deployment Guide",
+        "content": (
+            "The local demo requires Python 3.11 or newer, Neo4j, and a vector store. "
+            "Keep provider credentials in local environment variables."
+        ),
+        "source": "atlas-deployment",
+    }
+    rag = _RAGReaderDouble([document])
+    graph = _KnowledgeGraphReaderDouble({})
+    llm = _FakeLLM(
+        _response(
+            None,
+            _tool_call("search_documents", {"query": request}, "deployment-call"),
+        ),
+        _response(
+            "The local demo requires Python 3.11 or newer, Neo4j, and a vector store. "
+            "Keep provider credentials in local environment variables. "
+            "Source: Atlas Deployment Guide."
+        ),
     )
-    seen_requests: list[str] = []
-    node = _scripted_agent_node(
-        (lambda: rag.search_documents(request),),
-        "Atlas deployment uses Python 3.11+, Neo4j, and a vector store.",
-        seen_requests,
+
+    result = agent_factory(rag, graph, llm).invoke(request)
+
+    evidence = loads(_tool_messages(llm)[0]["content"])
+    assert result == (
+        "The local demo requires Python 3.11 or newer, Neo4j, and a vector store. "
+        "Keep provider credentials in local environment variables. "
+        "Source: Atlas Deployment Guide."
     )
+    assert all(
+        detail in result
+        for detail in (
+            "Python 3.11 or newer",
+            "Neo4j",
+            "vector store",
+            "provider credentials in local environment variables",
+            "Source: Atlas Deployment Guide",
+        )
+    )
+    assert rag.calls == [(request, 5)]
+    assert graph.calls == []
+    assert evidence == [document]
+    assert evidence[0]["title"] == document["title"]
+    assert evidence[0]["source"] == document["source"]
 
-    result = AgentOrchestrator.from_node(node).invoke(request)
 
-    assert result == "Atlas deployment uses Python 3.11+, Neo4j, and a vector store."
-    assert seen_requests == [request]
-    assert rag.calls == [(request, 5)]  # type: ignore[attr-defined]
-
-
-def test_atlas_assignee_question_uses_central_agent_and_graph_double() -> None:
+def test_atlas_assignee_question_uses_seeded_graph_evidence(agent_factory) -> None:
     request = "Who is assigned to PBI-102?"
-    graph: KnowledgeGraphReader = _KnowledgeGraphReaderDouble(
-        {
-            "PBI-102": {
-                "entity_type": "WorkItem",
-                "entity_id": "PBI-102",
-                "properties": {"title": "Upgrade Angular application"},
-                "relationships": {"ASSIGNED_TO": ("bob",), "BELONGS_TO": ("atlas",)},
-            }
-        }
+    work_item: GraphRecord = {
+        "entity_type": "WorkItem",
+        "entity_id": "PBI-102",
+        "properties": {"title": "Upgrade Angular application"},
+        "relationships": {
+            "ASSIGNED_TO": ("bob",),
+            "BELONGS_TO": ("atlas",),
+            "OWNS": ("alice",),
+            "DEPENDS_ON": ("PBI-101",),
+        },
+    }
+    rag = _RAGReaderDouble([])
+    graph = _KnowledgeGraphReaderDouble({"PBI-102": work_item})
+    llm = _FakeLLM(
+        _response(
+            None,
+            _tool_call(
+                "get_work_item",
+                {"work_item_id": "PBI-102"},
+                "assignee-call",
+            ),
+        ),
+        _response(
+            "PBI-102 is assigned to person ID bob. Source: Knowledge Graph — WorkItem PBI-102."
+        ),
     )
-    seen_requests: list[str] = []
-    node = _scripted_agent_node(
-        (lambda: graph.get_work_item("PBI-102"),),
-        "PBI-102 is assigned to Bob.",
-        seen_requests,
+
+    result = agent_factory(rag, graph, llm).invoke(request)
+
+    evidence = loads(_tool_messages(llm)[0]["content"])
+    assert result == (
+        "PBI-102 is assigned to person ID bob. Source: Knowledge Graph — WorkItem PBI-102."
     )
+    assert "person ID bob" in result
+    assert "Source: Knowledge Graph — WorkItem PBI-102" in result
+    assert graph.calls == [("get_work_item", "PBI-102")]
+    assert rag.calls == []
+    assert evidence == loads(dumps(work_item))
+    assert evidence["relationships"]["ASSIGNED_TO"] == ["bob"]
 
-    result = AgentOrchestrator.from_node(node).invoke(request)
 
-    assert result == "PBI-102 is assigned to Bob."
-    assert seen_requests == [request]
-    assert graph.calls == [("get_work_item", "PBI-102")]  # type: ignore[attr-defined]
-
-
-def test_atlas_migration_question_uses_both_readers_through_central_agent() -> None:
+def test_atlas_migration_question_uses_graph_and_rag_evidence(agent_factory) -> None:
     request = (
-        "Who owns the Atlas API migration and what does the migration "
-        "documentation say about it?"
+        "Who owns the Atlas API migration and what does the migration documentation say about it?"
     )
-    graph: KnowledgeGraphReader = _KnowledgeGraphReaderDouble(
-        {
-            "PBI-101": {
-                "entity_type": "WorkItem",
-                "entity_id": "PBI-101",
-                "properties": {"title": "Plan Atlas API migration"},
-                "relationships": {"BELONGS_TO": ("atlas",)},
-            },
-            "alice": {
-                "entity_type": "Person",
-                "entity_id": "alice",
-                "properties": {"name": "Alice"},
-                "relationships": {"OWNS": ("PBI-101",)},
-            }
-        }
-    )
-    rag: RAGReader = _RAGReaderDouble(
-        [
-            {
-                "id": "atlas-migration",
-                "title": "Atlas API Migration Notes",
-                "content": (
-                    "Preserve compatibility for existing clients and coordinate "
-                    "service and application changes."
-                ),
-                "source": "atlas-migration",
-            }
-        ]
-    )
-    seen_requests: list[str] = []
-    node = _scripted_agent_node(
-        (
-            lambda: graph.get_work_item("PBI-101"),
-            lambda: rag.search_documents("Atlas API migration"),
+    work_item: GraphRecord = {
+        "entity_type": "WorkItem",
+        "entity_id": "PBI-101",
+        "properties": {
+            "title": "Plan Atlas API migration",
+            "assignee_id": "alice",
+            "owner_id": "alice",
+        },
+        "relationships": {
+            "BELONGS_TO": ("atlas",),
+            "ASSIGNED_TO": ("alice",),
+            "OWNS": ("alice",),
+        },
+    }
+    document: RetrievedDocument = {
+        "id": "atlas-migration",
+        "title": "Atlas API Migration Notes",
+        "content": (
+            "The API migration plan should preserve compatibility for existing clients "
+            "and coordinate service and application changes."
         ),
-        (
-            "Alice owns the Atlas API migration. The notes call for preserving "
-            "client compatibility and coordinating service and application changes."
+        "source": "atlas-migration",
+    }
+    rag = _RAGReaderDouble([document])
+    graph = _KnowledgeGraphReaderDouble({"PBI-101": work_item})
+    llm = _FakeLLM(
+        _response(
+            None,
+            _tool_call(
+                "get_work_item",
+                {"work_item_id": "PBI-101"},
+                "migration-graph-call",
+            ),
+            _tool_call(
+                "search_documents",
+                {"query": "Atlas API migration"},
+                "migration-rag-call",
+            ),
         ),
-        seen_requests,
+        _response(
+            "PBI-101 is owned by person ID alice. "
+            "Source: Knowledge Graph — WorkItem PBI-101. "
+            "The migration plan should preserve compatibility for existing clients "
+            "and coordinate service and application changes. "
+            "Source: Atlas API Migration Notes."
+        ),
     )
 
-    result = AgentOrchestrator.from_node(node).invoke(request)
+    result = agent_factory(rag, graph, llm).invoke(request)
 
-    assert "Alice owns" in result
-    assert "preserving client compatibility" in result
-    assert seen_requests == [request]
-    assert graph.calls == [("get_work_item", "PBI-101")]  # type: ignore[attr-defined]
-    assert graph.records["alice"]["relationships"]["OWNS"] == ("PBI-101",)  # type: ignore[attr-defined]
-    assert rag.calls == [("Atlas API migration", 5)]  # type: ignore[attr-defined]
+    evidence_by_call = {
+        message["tool_call_id"]: loads(message["content"]) for message in _tool_messages(llm)
+    }
+    assert "PBI-101 is owned by person ID alice" in result
+    assert "preserve compatibility for existing clients" in result
+    assert "coordinate service and application changes" in result
+    assert "Source: Knowledge Graph — WorkItem PBI-101" in result
+    assert "Source: Atlas API Migration Notes" in result
+    assert graph.calls == [("get_work_item", "PBI-101")]
+    assert rag.calls == [("Atlas API migration", 5)]
+    assert evidence_by_call == {
+        "migration-graph-call": loads(dumps(work_item)),
+        "migration-rag-call": [document],
+    }
+    assert evidence_by_call["migration-graph-call"]["relationships"]["OWNS"] == ["alice"]
+    migration_evidence = evidence_by_call["migration-rag-call"][0]
+    assert migration_evidence["title"] == document["title"]
+    assert migration_evidence["source"] == document["source"]
+    assert migration_evidence["content"] == document["content"]

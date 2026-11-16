@@ -57,7 +57,7 @@
 - [X] T012 [P] [US1] Implement knowledge-graph retrieval for Project, Person, Work Item, and Technology relationships in `src/retrieval/graph.py`
 - [X] T013 [US1] Configure the LangGraph agent to use LLM-based tool selection for RAG, Knowledge Graph, and combined retrieval capabilities without keyword-based or hard-coded semantic routing in `src/agent/orchestrator.py`, `src/agent/graph.py`, and `src/agent/prompts/`
 - [X] T014 [US1] Add answer grounding, source attribution, and summarization for single-source and combined retrieval responses in `src/agent/graph.py`
-- [ ] T015 [US1] Validate the Atlas deployment, assignee lookup, and ownership-plus-documentation scenarios in `tests/integration/test_agent_routing.py`
+- [X] T015 [US1] Validate the Atlas deployment, assignee lookup, and ownership-plus-documentation scenarios in `tests/integration/test_agent_routing.py`
 
 **Checkpoint**: At this point, User Story 1 should be fully functional and independently testable.
 
