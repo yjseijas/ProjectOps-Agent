@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from config.settings import Settings
-from projectops_mcp.tools import assign_work_item
+from projectops_mcp.tools import assign_work_item, update_work_item_status
 
 
 class _RecordResult:
@@ -27,14 +27,35 @@ class _Transaction:
         if "RETURN project IS NOT NULL" in query:
             if self.state.get("validation_none"):
                 return _RecordResult(None)
-            return _RecordResult(
-                {
-                    "project_exists": self.state["project_exists"],
-                    "work_item_exists": self.state["work_item_exists"],
-                    "work_item_belongs": self.state["work_item_belongs"],
-                    "assignee_exists": self.state["assignee_exists"],
-                }
-            )
+            if "SET work_item.status" not in query:
+                if "assignee_exists" in self.state:
+                    return _RecordResult(
+                        {
+                            "project_exists": self.state["project_exists"],
+                            "work_item_exists": self.state["work_item_exists"],
+                            "work_item_belongs": self.state["work_item_belongs"],
+                            "assignee_exists": self.state["assignee_exists"],
+                        }
+                    )
+                return _RecordResult(
+                    {
+                        "project_exists": self.state["project_exists"],
+                        "work_item_exists": self.state["work_item_exists"],
+                        "work_item_belongs": self.state["work_item_belongs"],
+                    }
+                )
+        if "SET work_item.status" in query:
+            if self.state.get("update_none"):
+                return _RecordResult(None)
+            if self.state.get("update_mismatch"):
+                return _RecordResult({"work_item_id": "PBI-999"})
+            return _RecordResult({"work_item_id": parameters["work_item_id"]})
+        if "SET work_item.assignee_id" in query:
+            if self.state.get("update_none"):
+                return _RecordResult(None)
+            if self.state.get("update_mismatch"):
+                return _RecordResult({"work_item_id": "PBI-999"})
+            return _RecordResult({"work_item_id": parameters["work_item_id"]})
         if self.state.get("update_none"):
             return _RecordResult(None)
         return _RecordResult({"work_item_id": parameters["work_item_id"]})
@@ -52,6 +73,10 @@ class _Session:
         return self
 
     async def __aexit__(self, *_: object) -> None:
+        if self.state.get("exit_cancelled"):
+            raise asyncio.CancelledError()
+        if self.state.get("exit_error"):
+            raise RuntimeError("raw session cleanup credentials")
         self.closed = True
 
     async def execute_write(self, callback: Any) -> bool:
@@ -95,6 +120,14 @@ def _valid_arguments() -> dict[str, object]:
         "project_id": "atlas",
         "work_item_id": "PBI-102",
         "assignee_id": "alice",
+    }
+
+
+def _valid_status_arguments() -> dict[str, object]:
+    return {
+        "project_id": "atlas",
+        "work_item_id": "PBI-102",
+        "status": "In Progress",
     }
 
 
@@ -615,3 +648,471 @@ async def test_cancellation_exception_propagates(
 
     with pytest.raises(asyncio.CancelledError):
         await assign_work_item(_valid_arguments(), configuration=configuration)
+
+
+@pytest.mark.asyncio
+async def test_successful_status_update() -> None:
+    driver = _Driver()
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result == {
+        "status": "success",
+        "work_item_id": "PBI-102",
+        "new_status": "In Progress",
+        "message": "Work item status updated successfully.",
+    }
+    assert set(result) == {"status", "work_item_id", "new_status", "message"}
+    session = driver.sessions[0]
+    assert session.database == "atlas-test"
+    assert session.closed
+    assert len(session.transaction.calls) == 2
+    assert "SET work_item.status = $status" in session.transaction.calls[1][0]
+    assert "SET work_item.assignee_id" not in session.transaction.calls[1][0]
+
+
+@pytest.mark.asyncio
+async def test_status_update_rejects_non_mapping_arguments() -> None:
+    driver = _Driver()
+
+    result = await update_work_item_status(
+        ["not", "an", "object"],  # type: ignore[arg-type]
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert set(result) == {"status", "work_item_id", "message"}
+    assert result["status"] == "failure"
+    assert result["work_item_id"] == ""
+    assert driver.sessions == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "work_item_id"),
+    [
+        ({"project_id": "atlas", "status": "In Progress"}, ""),
+        ({"project_id": "atlas", "work_item_id": "PBI-102"}, "PBI-102"),
+        (
+            {"project_id": "atlas", "work_item_id": "PBI-102", "status": 123},
+            "PBI-102",
+        ),
+        (
+            {"project_id": "atlas", "work_item_id": "PBI-102", "status": "Unknown"},
+            "PBI-102",
+        ),
+    ],
+)
+async def test_status_update_input_failures(
+    arguments: dict[str, object],
+    work_item_id: str,
+) -> None:
+    driver = _Driver()
+
+    result = await update_work_item_status(
+        arguments,
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert set(result) == {"status", "work_item_id", "message"}
+    assert result["status"] == "failure"
+    assert result["work_item_id"] == work_item_id
+    assert isinstance(result["message"], str)
+    assert driver.sessions == []
+
+
+@pytest.mark.asyncio
+async def test_status_update_rejects_unexpected_property() -> None:
+    driver = _Driver()
+    arguments = _valid_status_arguments()
+    arguments["assignee_id"] = "alice"
+
+    result = await update_work_item_status(
+        arguments,
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert result["work_item_id"] == "PBI-102"
+    assert driver.sessions == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "expected_message"),
+    [
+        (
+            {
+                "project_exists": False,
+                "work_item_exists": True,
+                "work_item_belongs": True,
+            },
+            "Project not found",
+        ),
+        (
+            {
+                "project_exists": True,
+                "work_item_exists": False,
+                "work_item_belongs": False,
+            },
+            "Work item not found",
+        ),
+        (
+            {
+                "project_exists": True,
+                "work_item_exists": True,
+                "work_item_belongs": False,
+            },
+            "does not belong",
+        ),
+    ],
+)
+async def test_status_update_entity_failures_before_update(
+    state: dict[str, object],
+    expected_message: str,
+) -> None:
+    driver = _Driver(state)
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert expected_message in str(result["message"])
+    assert len(driver.sessions) == 1
+    assert len(driver.sessions[0].transaction.calls) == 1
+    assert driver.sessions[0].closed
+
+
+@pytest.mark.asyncio
+async def test_status_update_empty_validation_result_returns_failure() -> None:
+    state = {
+        "project_exists": True,
+        "work_item_exists": True,
+        "work_item_belongs": True,
+        "validation_none": True,
+    }
+    driver = _Driver(state)
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert len(driver.sessions[0].transaction.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_status_update_empty_update_result_returns_failure() -> None:
+    state = {
+        "project_exists": True,
+        "work_item_exists": True,
+        "work_item_belongs": True,
+        "update_none": True,
+    }
+    driver = _Driver(state)
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert "Unable to persist" in str(result["message"])
+    assert len(driver.sessions[0].transaction.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_status_update_mismatched_update_result_returns_failure() -> None:
+    state = {
+        "project_exists": True,
+        "work_item_exists": True,
+        "work_item_belongs": True,
+        "update_mismatch": True,
+    }
+    driver = _Driver(state)
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert "Unable to persist" in str(result["message"])
+
+
+@pytest.mark.asyncio
+async def test_status_update_false_transaction_result_returns_failure() -> None:
+    state = {
+        "project_exists": True,
+        "work_item_exists": True,
+        "work_item_belongs": True,
+        "execute_false": True,
+    }
+    driver = _Driver(state)
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert "Unable to complete" in str(result["message"])
+
+
+@pytest.mark.asyncio
+async def test_status_update_transaction_exception_is_safe_and_injected_driver_remains_open() -> (
+    None
+):
+    state = {
+        "project_exists": True,
+        "work_item_exists": True,
+        "work_item_belongs": True,
+        "execute_error": True,
+    }
+    driver = _Driver(state)
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert "raw database" not in str(result["message"])
+    assert not driver.closed
+
+
+@pytest.mark.asyncio
+async def test_status_update_session_exception_is_safe_and_closes_created_driver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import projectops_mcp.tools as tools_module
+
+    state = {
+        "project_exists": True,
+        "work_item_exists": True,
+        "work_item_belongs": True,
+        "session_error": True,
+    }
+    driver = _Driver(state)
+    monkeypatch.setattr(
+        tools_module.AsyncGraphDatabase,
+        "driver",
+        lambda *_args, **_kwargs: driver,
+    )
+    configuration = Settings(
+        neo4j_uri="bolt://localhost:7687",
+        neo4j_username="neo4j",
+        neo4j_password="test-password",
+        neo4j_database="neo4j",
+    )
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=configuration,
+    )
+
+    assert result["status"] == "failure"
+    assert "raw session" not in str(result["message"])
+    assert driver.closed
+
+
+@pytest.mark.asyncio
+async def test_status_update_driver_creation_failure_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import projectops_mcp.tools as tools_module
+
+    monkeypatch.setattr(
+        tools_module.AsyncGraphDatabase,
+        "driver",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("credential=secret")),
+    )
+    configuration = Settings(
+        neo4j_uri="bolt://localhost:7687",
+        neo4j_username="neo4j",
+        neo4j_password="test-password",
+        neo4j_database="neo4j",
+    )
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=configuration,
+    )
+
+    assert result["status"] == "failure"
+    assert "credential" not in str(result["message"])
+    assert "secret" not in str(result["message"])
+
+
+@pytest.mark.asyncio
+async def test_status_update_internal_driver_is_closed_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import projectops_mcp.tools as tools_module
+
+    state = {
+        "project_exists": True,
+        "work_item_exists": True,
+        "work_item_belongs": True,
+        "execute_error": True,
+    }
+    driver = _Driver(state)
+    monkeypatch.setattr(
+        tools_module.AsyncGraphDatabase,
+        "driver",
+        lambda *_args, **_kwargs: driver,
+    )
+    configuration = Settings(
+        neo4j_uri="bolt://localhost:7687",
+        neo4j_username="neo4j",
+        neo4j_password="test-password",
+        neo4j_database="neo4j",
+    )
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=configuration,
+    )
+
+    assert result["status"] == "failure"
+    assert driver.closed
+
+
+@pytest.mark.asyncio
+async def test_status_update_cleanup_exception_preserves_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import projectops_mcp.tools as tools_module
+
+    state = {
+        "project_exists": True,
+        "work_item_exists": True,
+        "work_item_belongs": True,
+        "close_error": True,
+    }
+    driver = _Driver(state)
+    monkeypatch.setattr(
+        tools_module.AsyncGraphDatabase,
+        "driver",
+        lambda *_args, **_kwargs: driver,
+    )
+    configuration = Settings(
+        neo4j_uri="bolt://localhost:7687",
+        neo4j_username="neo4j",
+        neo4j_password="test-password",
+        neo4j_database="neo4j",
+    )
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=configuration,
+    )
+
+    assert result["status"] == "success"
+    assert "raw cleanup" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_status_update_session_exit_exception_preserves_success() -> None:
+    state = {
+        "project_exists": True,
+        "work_item_exists": True,
+        "work_item_belongs": True,
+        "exit_error": True,
+    }
+    driver = _Driver(state)
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "success"
+    assert "raw session cleanup" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_status_update_session_exit_exception_preserves_failure() -> None:
+    state = {
+        "project_exists": True,
+        "work_item_exists": False,
+        "work_item_belongs": False,
+        "exit_error": True,
+    }
+    driver = _Driver(state)
+
+    result = await update_work_item_status(
+        _valid_status_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert "Work item not found" in str(result["message"])
+    assert "raw session cleanup" not in str(result["message"])
+
+
+@pytest.mark.asyncio
+async def test_status_update_session_exit_cancellation_propagates() -> None:
+    state = {
+        "project_exists": True,
+        "work_item_exists": True,
+        "work_item_belongs": True,
+        "exit_cancelled": True,
+    }
+    driver = _Driver(state)
+
+    with pytest.raises(asyncio.CancelledError):
+        await update_work_item_status(
+            _valid_status_arguments(),
+            configuration=Settings(neo4j_database="atlas-test"),
+            driver=driver,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_status_update_cancellation_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import projectops_mcp.tools as tools_module
+
+    state = {
+        "project_exists": True,
+        "work_item_exists": True,
+        "work_item_belongs": True,
+        "execute_cancelled": True,
+    }
+    driver = _Driver(state)
+    monkeypatch.setattr(
+        tools_module.AsyncGraphDatabase,
+        "driver",
+        lambda *_args, **_kwargs: driver,
+    )
+    configuration = Settings(
+        neo4j_uri="bolt://localhost:7687",
+        neo4j_username="neo4j",
+        neo4j_password="test-password",
+        neo4j_database="neo4j",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await update_work_item_status(
+            _valid_status_arguments(),
+            configuration=configuration,
+        )
