@@ -77,7 +77,7 @@
 ### Implementation for User Story 2
 
 - [X] T018 [P] [US2] Implement the JSON-schema definitions and input/output validation contracts for the MCP action tools in `src/projectops_mcp/schemas.py`
-- [ ] T019 [US2] Implement `assign_work_item` execution logic, input validation, and Neo4j persistence in `src/projectops_mcp/tools.py`
+- [X] T019 [US2] Implement `assign_work_item` execution logic, input validation, and Neo4j persistence in `src/projectops_mcp/tools.py`
 - [ ] T020 [US2] Implement `update_work_item_status` execution logic, status validation, and Neo4j persistence in `src/projectops_mcp/tools.py`
 - [ ] T021 [US2] Implement `create_work_item` execution logic, Neo4j persistence, and default `Backlog` status behavior in `src/projectops_mcp/tools.py`
 - [ ] T022 [US2] Integrate the MCP client with the LangGraph agent so MCP-exposed action tools are available to the LLM for autonomous tool selection and invocation in `src/agent/orchestrator.py` and `src/agent/graph.py`
