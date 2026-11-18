@@ -6,7 +6,11 @@ from typing import Any
 import pytest
 
 from config.settings import Settings
-from projectops_mcp.tools import assign_work_item, update_work_item_status
+from projectops_mcp.tools import (
+    assign_work_item,
+    create_work_item,
+    update_work_item_status,
+)
 
 
 class _RecordResult:
@@ -18,12 +22,73 @@ class _RecordResult:
 
 
 class _Transaction:
-    def __init__(self, state: dict[str, object]) -> None:
+    def __init__(
+        self,
+        state: dict[str, object],
+        allocation_locks: dict[str, asyncio.Lock],
+    ) -> None:
         self.state = state
+        self.allocation_locks = allocation_locks
+        self.allocation_lock: asyncio.Lock | None = None
         self.calls: list[tuple[str, dict[str, object]]] = []
 
     async def run(self, query: str, **parameters: object) -> _RecordResult:
         self.calls.append((query, parameters))
+        if "SET project._projectops_work_item_id_lock" in query:
+            if not self.state.get("project_exists", True):
+                return _RecordResult(None)
+            project_id = str(parameters["project_id"])
+            if project_id not in self.allocation_locks:
+                self.allocation_locks[project_id] = asyncio.Lock()
+            self.allocation_lock = self.allocation_locks[project_id]
+            await self.allocation_lock.acquire()
+            return _RecordResult({"project_id": project_id})
+        if (
+            "OPTIONAL MATCH (work_item" not in query
+            and "RETURN project IS NOT NULL AS project_exists" in query
+        ):
+            if self.state.get("validation_none"):
+                return _RecordResult(None)
+            return _RecordResult({"project_exists": self.state.get("project_exists", True)})
+        if (
+            "OPTIONAL MATCH (project)<-[:BELONGS_TO]-(work_item:WorkItem)" in query
+            and "AS work_item_id" in query
+        ):
+            if self.state.get("id_none"):
+                return _RecordResult(None)
+            await asyncio.sleep(0)
+            work_item_ids_by_project = self.state["work_item_ids_by_project"]
+            assert isinstance(work_item_ids_by_project, dict)
+            project_id = str(parameters["project_id"])
+            existing_ids = work_item_ids_by_project.get(project_id, [])
+            assert isinstance(existing_ids, list)
+            numeric_suffixes = [
+                int(work_item_id[4:])
+                for work_item_id in existing_ids
+                if isinstance(work_item_id, str)
+                and work_item_id.startswith("PBI-")
+                and work_item_id[4:].isdigit()
+            ]
+            next_suffix = max(numeric_suffixes) + 1 if numeric_suffixes else 101
+            work_item_id = f"PBI-{next_suffix}"
+            return _RecordResult(
+                {
+                    "work_item_id": work_item_id,
+                    "duplicate": self.state.get("duplicate", False) or work_item_id in existing_ids,
+                }
+            )
+        if "CREATE (work_item:WorkItem" in query:
+            if self.state.get("create_none"):
+                return _RecordResult(None)
+            if self.state.get("create_mismatch"):
+                return _RecordResult({"work_item_id": "PBI-999"})
+            work_item_ids_by_project = self.state["work_item_ids_by_project"]
+            assert isinstance(work_item_ids_by_project, dict)
+            project_id = str(parameters["project_id"])
+            existing_ids = work_item_ids_by_project.setdefault(project_id, [])
+            assert isinstance(existing_ids, list)
+            existing_ids.append(parameters["work_item_id"])
+            return _RecordResult({"work_item_id": parameters["work_item_id"]})
         if "RETURN project IS NOT NULL" in query:
             if self.state.get("validation_none"):
                 return _RecordResult(None)
@@ -60,11 +125,19 @@ class _Transaction:
             return _RecordResult(None)
         return _RecordResult({"work_item_id": parameters["work_item_id"]})
 
+    def release_allocation_lock(self) -> None:
+        if self.allocation_lock is not None and self.allocation_lock.locked():
+            self.allocation_lock.release()
+
 
 class _Session:
-    def __init__(self, state: dict[str, object]) -> None:
+    def __init__(
+        self,
+        state: dict[str, object],
+        allocation_locks: dict[str, asyncio.Lock],
+    ) -> None:
         self.state = state
-        self.transaction = _Transaction(state)
+        self.transaction = _Transaction(state, allocation_locks)
         self.closed = False
         self.database: str | None = None
         self.write_calls = 0
@@ -87,7 +160,10 @@ class _Session:
             raise asyncio.CancelledError()
         if self.state.get("execute_false"):
             return False
-        return await callback(self.transaction)
+        try:
+            return await callback(self.transaction)
+        finally:
+            self.transaction.release_allocation_lock()
 
 
 class _Driver:
@@ -98,13 +174,15 @@ class _Driver:
             "work_item_belongs": True,
             "assignee_exists": True,
         }
+        self.state.setdefault("work_item_ids_by_project", {"atlas": []})
+        self._allocation_locks: dict[str, asyncio.Lock] = {}
         self.sessions: list[_Session] = []
         self.closed = False
 
     def session(self, *, database: str) -> _Session:
         if self.state.get("session_error"):
             raise RuntimeError("raw session secret and database details")
-        session = _Session(self.state)
+        session = _Session(self.state, self._allocation_locks)
         session.database = database
         self.sessions.append(session)
         return session
@@ -1116,3 +1194,413 @@ async def test_status_update_cancellation_propagates(
             _valid_status_arguments(),
             configuration=configuration,
         )
+
+
+def _valid_create_arguments() -> dict[str, object]:
+    return {
+        "project_id": "atlas",
+        "title": "Upgrade Angular application",
+        "description": "Upgrade the Atlas web application.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_work_item_defaults_status_to_backlog() -> None:
+    driver = _Driver(
+        {"project_exists": True, "work_item_ids_by_project": {"atlas": ["PBI-101", "PBI-102"]}}
+    )
+
+    result = await create_work_item(
+        _valid_create_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result == {
+        "status": "success",
+        "work_item_id": "PBI-103",
+        "title": "Upgrade Angular application",
+        "message": "Work item created successfully.",
+    }
+    transaction = driver.sessions[0].transaction
+    lock_query = transaction.calls[1][0]
+    id_query = transaction.calls[2][0]
+    create_query, parameters = transaction.calls[3]
+    assert "SET project._projectops_work_item_id_lock" in lock_query
+    assert "coalesce(project._projectops_work_item_id_lock, 0) + 1" in lock_query
+    assert "MATCH (project:Project {id: $project_id})" in id_query
+    assert "OPTIONAL MATCH (project)<-[:BELONGS_TO]-(work_item:WorkItem)" in id_query
+    assert "work_item.id =~ 'PBI-[0-9]+'" in id_query
+    assert "max_suffix + 1, 101" in id_query
+    assert "PBI-' + toString(next_suffix)" in id_query
+    assert (
+        "OPTIONAL MATCH (project)<-[:BELONGS_TO]-(existing:WorkItem {id: work_item_id})" in id_query
+    )
+    assert "CREATE (work_item:WorkItem" in create_query
+    assert "MERGE (work_item)-[:BELONGS_TO]->(project)" in create_query
+    assert "ASSIGNED_TO" not in create_query
+    assert "OWNS" not in create_query
+    assert "DEPENDS_ON" not in create_query
+    assert parameters["status"] == "Backlog"
+    assert parameters["project_id"] == "atlas"
+    assert parameters["title"] == "Upgrade Angular application"
+    assert parameters["description"] == "Upgrade the Atlas web application."
+
+
+@pytest.mark.asyncio
+async def test_create_work_item_accepts_explicit_status_and_returns_generated_id() -> None:
+    driver = _Driver(
+        {
+            "project_exists": True,
+            "work_item_ids_by_project": {"atlas": ["PBI-101", "PBI-102", "PBI-103"]},
+        }
+    )
+    arguments = _valid_create_arguments()
+    arguments["status"] = "In Progress"
+
+    result = await create_work_item(
+        arguments,
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "success"
+    assert result["work_item_id"] == "PBI-104"
+    assert result["title"] == arguments["title"]
+    assert driver.sessions[0].transaction.calls[3][1]["status"] == "In Progress"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("existing_ids", "expected_id"),
+    [
+        (["PBI-50", "PBI-75"], "PBI-76"),
+        (["PBI-50", "PBI-101"], "PBI-102"),
+        ([], "PBI-101"),
+        (["PBI-50", "PBI-75", "PBI-invalid"], "PBI-76"),
+    ],
+)
+async def test_create_work_item_generates_next_project_scoped_numeric_id(
+    existing_ids: list[str],
+    expected_id: str,
+) -> None:
+    driver = _Driver(
+        {
+            "project_exists": True,
+            "work_item_ids_by_project": {
+                "atlas": existing_ids,
+                "another-project": ["PBI-900"],
+            },
+        }
+    )
+
+    result = await create_work_item(
+        _valid_create_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "success"
+    assert result["work_item_id"] == expected_id
+    assert "PBI-900" in driver.state["work_item_ids_by_project"]["another-project"]  # type: ignore[index,operator]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_create_work_items_serialize_project_id_allocation() -> None:
+    driver = _Driver(
+        {
+            "project_exists": True,
+            "work_item_ids_by_project": {"atlas": []},
+        }
+    )
+
+    first, second = await asyncio.gather(
+        create_work_item(
+            _valid_create_arguments(),
+            configuration=Settings(neo4j_database="atlas-test"),
+            driver=driver,  # type: ignore[arg-type]
+        ),
+        create_work_item(
+            _valid_create_arguments(),
+            configuration=Settings(neo4j_database="atlas-test"),
+            driver=driver,  # type: ignore[arg-type]
+        ),
+    )
+
+    assert first["work_item_id"] == "PBI-101"
+    assert second["work_item_id"] == "PBI-102"
+    assert first["work_item_id"] != second["work_item_id"]
+    assert driver.state["work_item_ids_by_project"]["atlas"] == ["PBI-101", "PBI-102"]  # type: ignore[index]
+    for session in driver.sessions:
+        queries = [query for query, _ in session.transaction.calls]
+        lock_index = next(
+            index
+            for index, query in enumerate(queries)
+            if "SET project._projectops_work_item_id_lock" in query
+        )
+        allocation_index = next(
+            index
+            for index, query in enumerate(queries)
+            if "OPTIONAL MATCH (project)<-[:BELONGS_TO]-(work_item:WorkItem)" in query
+        )
+        assert lock_index < allocation_index
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"project_id": "atlas", "title": "Missing description"},
+        {"project_id": "atlas", "description": "Missing title"},
+        {"title": "Missing project", "description": "Missing project"},
+    ],
+)
+async def test_create_work_item_rejects_missing_required_fields(
+    arguments: dict[str, object],
+) -> None:
+    driver = _Driver()
+
+    result = await create_work_item(
+        arguments,
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert set(result) == {"status", "work_item_id", "message"}
+    assert result["status"] == "failure"
+    assert "Missing required" in str(result["message"])
+    assert driver.sessions == []
+
+
+@pytest.mark.asyncio
+async def test_create_work_item_rejects_non_mapping_and_unexpected_properties() -> None:
+    non_mapping_driver = _Driver()
+    non_mapping_result = await create_work_item(
+        ["not", "an", "object"],  # type: ignore[arg-type]
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=non_mapping_driver,  # type: ignore[arg-type]
+    )
+    assert non_mapping_result["status"] == "failure"
+    assert non_mapping_driver.sessions == []
+
+    unexpected_driver = _Driver()
+    unexpected_arguments = _valid_create_arguments()
+    unexpected_arguments["assignee_id"] = "alice"
+    unexpected_result = await create_work_item(
+        unexpected_arguments,
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=unexpected_driver,  # type: ignore[arg-type]
+    )
+    assert unexpected_result["status"] == "failure"
+    assert "unexpected properties" in str(unexpected_result["message"])
+    assert unexpected_driver.sessions == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("property_name", ["project_id", "title", "description", "status"])
+async def test_create_work_item_rejects_non_string_values(property_name: str) -> None:
+    driver = _Driver()
+    arguments = _valid_create_arguments()
+    if property_name == "status":
+        arguments["status"] = 123
+    else:
+        arguments[property_name] = 123
+
+    result = await create_work_item(
+        arguments,
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert "must be a string" in str(result["message"])
+    assert driver.sessions == []
+
+
+@pytest.mark.asyncio
+async def test_create_work_item_rejects_invalid_status() -> None:
+    driver = _Driver()
+    arguments = _valid_create_arguments()
+    arguments["status"] = "Unknown"
+
+    result = await create_work_item(
+        arguments,
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert "Invalid work-item status" in str(result["message"])
+    assert driver.sessions == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "expected_message"),
+    [
+        ({"project_exists": False}, "Project not found"),
+        ({"project_exists": True, "duplicate": True}, "already exists"),
+        ({"project_exists": True, "id_none": True}, "Unable to determine"),
+    ],
+)
+async def test_create_work_item_entity_and_id_failures(
+    state: dict[str, object],
+    expected_message: str,
+) -> None:
+    driver = _Driver(state)
+
+    result = await create_work_item(
+        _valid_create_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert expected_message in str(result["message"])
+    assert len(driver.sessions) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "expected_message"),
+    [
+        ({"validation_none": True}, "Unable to validate"),
+        ({"create_none": True}, "Unable to persist"),
+        ({"create_mismatch": True}, "Unable to persist"),
+        ({"execute_false": True}, "Unable to complete"),
+        ({"execute_error": True}, "Unable to complete"),
+    ],
+)
+async def test_create_work_item_empty_persistence_and_database_failures(
+    state: dict[str, object],
+    expected_message: str,
+) -> None:
+    driver = _Driver(state)
+
+    result = await create_work_item(
+        _valid_create_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert expected_message in str(result["message"])
+    assert "raw database" not in str(result["message"])
+
+
+@pytest.mark.asyncio
+async def test_create_work_item_session_entry_failure_is_safe() -> None:
+    driver = _Driver({"session_error": True})
+
+    result = await create_work_item(
+        _valid_create_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert "raw session" not in str(result["message"])
+
+
+@pytest.mark.asyncio
+async def test_create_work_item_session_exit_exception_preserves_success() -> None:
+    driver = _Driver({"exit_error": True})
+
+    result = await create_work_item(
+        _valid_create_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "success"
+    assert "raw cleanup" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_create_work_item_session_exit_exception_preserves_failure() -> None:
+    driver = _Driver({"project_exists": False, "exit_error": True})
+
+    result = await create_work_item(
+        _valid_create_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failure"
+    assert "Project not found" in str(result["message"])
+    assert "raw cleanup" not in str(result["message"])
+
+
+@pytest.mark.asyncio
+async def test_create_work_item_session_exit_cancellation_propagates() -> None:
+    driver = _Driver({"exit_cancelled": True})
+
+    with pytest.raises(asyncio.CancelledError):
+        await create_work_item(
+            _valid_create_arguments(),
+            configuration=Settings(neo4j_database="atlas-test"),
+            driver=driver,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_work_item_injected_driver_is_not_closed() -> None:
+    driver = _Driver()
+
+    await create_work_item(
+        _valid_create_arguments(),
+        configuration=Settings(neo4j_database="atlas-test"),
+        driver=driver,  # type: ignore[arg-type]
+    )
+
+    assert not driver.closed
+
+
+@pytest.mark.asyncio
+async def test_create_work_item_internal_driver_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import projectops_mcp.tools as tools_module
+
+    driver = _Driver()
+    monkeypatch.setattr(
+        tools_module.AsyncGraphDatabase,
+        "driver",
+        lambda *_args, **_kwargs: driver,
+    )
+    configuration = Settings(
+        neo4j_uri="bolt://localhost:7687",
+        neo4j_username="neo4j",
+        neo4j_password="test-password",
+        neo4j_database="neo4j",
+    )
+
+    await create_work_item(_valid_create_arguments(), configuration=configuration)
+
+    assert driver.closed
+
+
+@pytest.mark.asyncio
+async def test_create_work_item_driver_cleanup_exception_preserves_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import projectops_mcp.tools as tools_module
+
+    driver = _Driver({"close_error": True})
+    monkeypatch.setattr(
+        tools_module.AsyncGraphDatabase,
+        "driver",
+        lambda *_args, **_kwargs: driver,
+    )
+    configuration = Settings(
+        neo4j_uri="bolt://localhost:7687",
+        neo4j_username="neo4j",
+        neo4j_password="test-password",
+        neo4j_database="neo4j",
+    )
+
+    result = await create_work_item(
+        _valid_create_arguments(),
+        configuration=configuration,
+    )
+
+    assert result["status"] == "success"
+    assert "raw cleanup" not in str(result)

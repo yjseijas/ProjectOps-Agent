@@ -46,6 +46,47 @@ SET work_item.status = $status
 RETURN work_item.id AS work_item_id
 """
 
+_CREATE_PROJECT_VALIDATION_QUERY = """
+OPTIONAL MATCH (project:Project {id: $project_id})
+RETURN project IS NOT NULL AS project_exists
+"""
+
+_CREATE_PROJECT_LOCK_QUERY = """
+MATCH (project:Project {id: $project_id})
+SET project._projectops_work_item_id_lock =
+    coalesce(project._projectops_work_item_id_lock, 0) + 1
+RETURN project.id AS project_id
+"""
+
+_CREATE_ID_QUERY = """
+MATCH (project:Project {id: $project_id})
+OPTIONAL MATCH (project)<-[:BELONGS_TO]-(work_item:WorkItem)
+WITH project, max(
+    CASE
+        WHEN work_item.id =~ 'PBI-[0-9]+'
+        THEN toInteger(substring(work_item.id, 4))
+        ELSE null
+    END
+) AS max_suffix
+WITH project, coalesce(max_suffix + 1, 101) AS next_suffix
+WITH project, 'PBI-' + toString(next_suffix) AS work_item_id
+OPTIONAL MATCH (project)<-[:BELONGS_TO]-(existing:WorkItem {id: work_item_id})
+RETURN work_item_id, existing IS NOT NULL AS duplicate
+"""
+
+_CREATE_WORK_ITEM_QUERY = """
+MATCH (project:Project {id: $project_id})
+CREATE (work_item:WorkItem {
+    id: $work_item_id,
+    title: $title,
+    project_id: $project_id,
+    description: $description,
+    status: $status
+})
+MERGE (work_item)-[:BELONGS_TO]->(project)
+RETURN work_item.id AS work_item_id
+"""
+
 
 def _validate_assign_arguments(arguments: Mapping[str, object]) -> dict[str, object] | None:
     if not isinstance(arguments, Mapping):
@@ -193,6 +234,81 @@ def _validate_status_arguments(arguments: Mapping[str, object]) -> dict[str, obj
     return None
 
 
+def _validate_create_arguments(arguments: Mapping[str, object]) -> dict[str, object] | None:
+    if not isinstance(arguments, Mapping):
+        return {
+            "status": "failure",
+            "work_item_id": "",
+            "message": "Creation arguments must be an object.",
+        }
+
+    input_schema = ACTION_TOOL_SCHEMAS["create_work_item"]["input_schema"]
+    properties = input_schema["properties"]
+    required = input_schema["required"]
+
+    if not isinstance(properties, dict) or not isinstance(required, list):
+        return {
+            "status": "failure",
+            "work_item_id": "",
+            "message": "Invalid work-item creation schema configuration.",
+        }
+
+    if set(arguments) - set(properties):
+        return {
+            "status": "failure",
+            "work_item_id": "",
+            "message": "Creation arguments contain unexpected properties.",
+        }
+
+    for name in required:
+        if name not in arguments:
+            return {
+                "status": "failure",
+                "work_item_id": "",
+                "message": f"Missing required creation argument: {name}.",
+            }
+
+    for name, property_schema in properties.items():
+        if name not in arguments:
+            continue
+        if not isinstance(property_schema, dict):
+            return {
+                "status": "failure",
+                "work_item_id": "",
+                "message": "Invalid work-item creation schema configuration.",
+            }
+        if property_schema.get("type") == "string" and not isinstance(arguments[name], str):
+            return {
+                "status": "failure",
+                "work_item_id": "",
+                "message": f"Creation argument '{name}' must be a string.",
+            }
+
+    if "status" in arguments:
+        status_schema = properties["status"]
+        if not isinstance(status_schema, dict):
+            return {
+                "status": "failure",
+                "work_item_id": "",
+                "message": "Invalid work-item creation schema configuration.",
+            }
+        allowed_statuses = status_schema.get("enum")
+        if not isinstance(allowed_statuses, list):
+            return {
+                "status": "failure",
+                "work_item_id": "",
+                "message": "Invalid work-item creation schema configuration.",
+            }
+        if arguments["status"] not in allowed_statuses:
+            return {
+                "status": "failure",
+                "work_item_id": "",
+                "message": "Invalid work-item status.",
+            }
+
+    return None
+
+
 def _create_driver(configuration: Settings) -> AsyncDriver:
     password = configuration.neo4j_password
     if password is None or not password.get_secret_value():
@@ -322,6 +438,154 @@ async def assign_work_item(
                 },
                 work_item_id,
             )
+    finally:
+        if own_driver:
+            try:
+                await neo4j_driver.close()
+            except Exception:
+                pass
+
+    return result
+
+
+async def create_work_item(
+    arguments: Mapping[str, object],
+    *,
+    configuration: Settings = settings,
+    driver: AsyncDriver | None = None,
+) -> dict[str, object]:
+    """Create a new Atlas work item and link it to an existing project."""
+    if not isinstance(arguments, Mapping):
+        return {
+            "status": "failure",
+            "work_item_id": "",
+            "message": "Creation arguments must be an object.",
+        }
+
+    validation_error = _validate_create_arguments(arguments)
+    if validation_error is not None:
+        return _failure_result(validation_error, "")
+
+    project_id = arguments["project_id"]
+    title = arguments["title"]
+    description = arguments["description"]
+    status = arguments.get("status", "Backlog")
+
+    own_driver = driver is None
+    neo4j_driver: AsyncDriver | None = driver
+    if neo4j_driver is None:
+        try:
+            neo4j_driver = _create_driver(configuration)
+        except Exception:
+            return _failure_result(
+                {
+                    "status": "failure",
+                    "message": "Unable to initialize the work-item creation service.",
+                },
+                "",
+            )
+
+    result: dict[str, object]
+    try:
+        try:
+            session_context = neo4j_driver.session(database=configuration.neo4j_database)
+            session = await session_context.__aenter__()
+        except Exception:
+            result = _failure_result(
+                {
+                    "status": "failure",
+                    "message": "Unable to complete work-item creation.",
+                },
+                "",
+            )
+        else:
+            try:
+                created_work_item_id = ""
+
+                async def validate_and_create(transaction: object) -> bool:
+                    nonlocal created_work_item_id
+                    validation_result = await transaction.run(  # type: ignore[attr-defined]
+                        _CREATE_PROJECT_VALIDATION_QUERY,
+                        project_id=project_id,
+                    )
+                    validation = await validation_result.single()
+                    if validation is None:
+                        raise CreateValidationError("Unable to validate work-item creation.")
+                    if not validation["project_exists"]:
+                        raise CreateValidationError("Project not found.")
+
+                    lock_result = await transaction.run(  # type: ignore[attr-defined]
+                        _CREATE_PROJECT_LOCK_QUERY,
+                        project_id=project_id,
+                    )
+                    locked_project = await lock_result.single()
+                    if locked_project is None or locked_project.get("project_id") != project_id:
+                        raise CreateValidationError("Project not found.")
+
+                    id_result = await transaction.run(  # type: ignore[attr-defined]
+                        _CREATE_ID_QUERY,
+                        project_id=project_id,
+                    )
+                    id_record = await id_result.single()
+                    if id_record is None:
+                        raise CreateValidationError("Unable to determine a work-item ID.")
+
+                    work_item_id = id_record["work_item_id"]
+                    if not isinstance(work_item_id, str) or not work_item_id:
+                        raise CreateValidationError("Unable to determine a work-item ID.")
+                    if id_record["duplicate"]:
+                        raise CreateValidationError("Work item ID already exists in the project.")
+
+                    create_result = await transaction.run(  # type: ignore[attr-defined]
+                        _CREATE_WORK_ITEM_QUERY,
+                        project_id=project_id,
+                        work_item_id=work_item_id,
+                        title=title,
+                        description=description,
+                        status=status,
+                    )
+                    created = await create_result.single()
+                    if created is None or created.get("work_item_id") != work_item_id:
+                        raise CreateValidationError("Unable to persist the work-item creation.")
+                    created_work_item_id = work_item_id
+                    return True
+
+                transaction_result = await session.execute_write(validate_and_create)
+                if transaction_result is not True:
+                    result = _failure_result(
+                        {
+                            "status": "failure",
+                            "message": "Unable to complete work-item creation.",
+                        },
+                        "",
+                    )
+                else:
+                    result = {
+                        "status": "success",
+                        "work_item_id": created_work_item_id,
+                        "title": title,
+                        "message": "Work item created successfully.",
+                    }
+            except CreateValidationError as error:
+                result = _failure_result(
+                    {"status": "failure", "message": str(error)},
+                    "",
+                )
+            except Exception:
+                result = _failure_result(
+                    {
+                        "status": "failure",
+                        "message": "Unable to complete work-item creation.",
+                    },
+                    "",
+                )
+            finally:
+                try:
+                    await session_context.__aexit__(None, None, None)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
     finally:
         if own_driver:
             try:
@@ -471,6 +735,10 @@ async def update_work_item_status(
 
 class AssignmentValidationError(Exception):
     """A clear domain validation failure within an assignment transaction."""
+
+
+class CreateValidationError(Exception):
+    """A clear domain validation failure within a work-item creation transaction."""
 
 
 def _failure_result(
